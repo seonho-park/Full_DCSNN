@@ -72,7 +72,7 @@ class SAR_DataSet(torchdata.Dataset):
         patch = transforms.functional.to_tensor(patch)
         return patch, idx
 
-
+# reference: https://github.com/mazenmel/Deep-homography-estimation-Pytorch/blob/master/DataGenerationAndProcessing.py
 rho          = 32
 patch_size   = 224
 top_point    = (32,32)
