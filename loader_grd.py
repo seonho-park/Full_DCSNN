@@ -53,13 +53,9 @@ class SAR_TrainDataSet(SAR_DataSet):
         super(SAR_TrainDataSet,self).__init__(img_path, patch_size)
         self.sim_mat = a_mat
         self.homography = homography
-        print("self.homography", self.homography)
 
     def __getitem__(self, idx):
         img = Image.open(os.path.join(self.img_path, "%04d.png"%(idx)))
-        
-
-
         img = np.array(img)
         img_tensor = Image.fromarray(img)
         img_tensor = transforms.functional.to_tensor(img_tensor)
