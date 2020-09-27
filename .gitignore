@@ -4,5 +4,6 @@ __pycache__/
 chpt/**
 results/**
 batchout/**
+data/**
 
 batch.sh

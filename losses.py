@@ -39,26 +39,35 @@ class Loss_DCSNN2(nn.Module):
 
 
 class Loss_DCSNN(nn.Module):
-    def __init__(self, device, lam_reg = 0.1, temp = 1.):
+    def __init__(self, device, lam_reg = 0.1, temp = 1., self_learning=True):
         super().__init__()
         self.lam_reg = lam_reg
         self.device = device
         self.T = temp
+        self.self_learning = self_learning
 
-    def forward(self, global_features1, global_features2, D_global, S):
-        omega_x = global_features1.mm(Variable(D_global,requires_grad=False).t())/self.T # logit values
-
-        self_omega_x = (global_features1*Variable(global_features2,requires_grad=False)).sum(axis=1)/self.T
-        label = torch.ones_like(self_omega_x)
+    def forward(self, global_feature_q, global_feature_k, D_global, S):
+        # regularization
+        norm = global_feature_q.norm(dim=1)
+        reg_global = (norm - torch.ones_like(norm).cuda()).pow(2).mean()
         
         # global loss
+        omega_x = global_feature_q.mm(Variable(D_global,requires_grad=False).t())/self.T # logit values
         global_loss = F.binary_cross_entropy_with_logits(omega_x, S)
-        global_loss2 = F.binary_cross_entropy_with_logits(self_omega_x, label)
-        norm = global_features1.norm(dim=1)
-        reg_global = (norm - torch.ones_like(norm).cuda()).pow(2).mean()
+        
+        # self learning
+        if self.self_learning:
+            norm_k = global_feature_k.norm(dim=1)
+            reg_global_self = (norm_k - torch.ones_like(norm_k).cuda()).pow(2).mean()
+
+            self_omega_x = (global_feature_q*Variable(global_feature_k,requires_grad=False)).sum(dim=1)/self.T
+            label = torch.ones_like(self_omega_x) # self label
+            global_loss_self = F.binary_cross_entropy_with_logits(self_omega_x, label)
+            global_loss += global_loss_self
+            reg_global += reg_global_self
 
         # total loss
-        loss =  global_loss + global_loss2 + self.lam_reg * reg_global
+        loss =  global_loss + self.lam_reg * reg_global
 
         return loss, global_loss, reg_global
 

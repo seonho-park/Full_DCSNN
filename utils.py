@@ -42,7 +42,7 @@ def set_seed(seed, device):
     if device == 'cuda':
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.benchmark = True
 
 
 def config_backup_get_log(args, filename):
@@ -79,7 +79,7 @@ def config_backup_get_log(args, filename):
 
     return logger, result_dir, dir_name
 
-def is_correct(query_georef, georef):
+def is_correct(query_georef, georef): # should be changed!
     ul_query = query_georef['upperleft']
     ur_query = query_georef['upperright']
     ll_query = query_georef['lowerleft']

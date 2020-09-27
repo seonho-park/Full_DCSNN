@@ -11,9 +11,9 @@ from random import uniform
 import os
 import random
 import cv2
-    
+import glob
 
-class SAR_DataSet(torchdata.Dataset):    
+class SAR_DataSet_POLSAR1(torchdata.Dataset):    
     def __init__(self, img_path, data, desc, kp, desc_sift, kp_sift, patch_size, stride):
         self.img_path = img_path
         self.patch_size = patch_size
@@ -23,6 +23,7 @@ class SAR_DataSet(torchdata.Dataset):
         self.kp = kp
         self.desc_sift = desc_sift
         self.kp_sift = kp_sift
+
 
     def get_pixel_coords(self, idx):
         return self.data[idx]['coordinate']
@@ -60,9 +61,6 @@ class SAR_DataSet(torchdata.Dataset):
         return kp_, desc_
 
 
-    def get_image(self,idx):
-        return np.load(os.path.join(self.img_path, "%04d.npy"%(idx)))
-    
     def __len__(self):
         return len(self.data)
 
@@ -72,9 +70,31 @@ class SAR_DataSet(torchdata.Dataset):
         patch = transforms.functional.to_tensor(patch)
         return patch, idx
 
+
+class SAR_DataSet(torchdata.Dataset):    
+    def __init__(self, img_path, patch_size=224):
+        self.img_path = img_path
+        self.patch_size = patch_size
+        self.data = glob.glob(os.path.join(img_path, '*.png'))
+ 
+    def get_data(self,idx):
+        data = pickle.load(open(os.path.join(self.img_path, "%04d.pkl"%(idx)),'rb'))
+        return data
+
+    def get_image(self,idx):
+        return np.load(os.path.join(self.img_path, "%04d.npy"%(idx)))
+    
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        patch = Image.open(os.path.join(self.img_path, "%04d.png"%(idx)))
+        patch = transforms.functional.to_tensor(patch)
+        return patch, idx
+
 # reference: https://github.com/mazenmel/Deep-homography-estimation-Pytorch/blob/master/DataGenerationAndProcessing.py
 rho          = 32
-patch_size   = 224
+patch_size   = 160
 top_point    = (32,32)
 left_point   = (patch_size+32, 32)
 bottom_point = (patch_size+32, patch_size+32)
@@ -82,34 +102,110 @@ right_point  = (32, patch_size+32)
 four_points = [top_point, left_point, bottom_point, right_point]
 
 
-class SAR_TrainDataSet(SAR_DataSet):
+
+class SAR_TrainDataSet_POLSAR1(SAR_DataSet_POLSAR1):
     def __init__(self, img_path, data, a_mat, desc, kp, desc_sift, kp_sift, patch_size=800, stride=200):
-        super(SAR_TrainDataSet,self).__init__(img_path, data, desc, kp, desc_sift, kp_sift, patch_size, stride)
+        super(SAR_TrainDataSet_POLSAR1,self).__init__(img_path, data, desc, kp, desc_sift, kp_sift, patch_size, stride)
         self.sim_mat = a_mat
 
     def __getitem__(self, idx):
         img = np.load(os.path.join(self.img_path, "%04d.npy"%(idx)))
-
-        # warp 1
-        img1 = self.warp_image(img)
-        img1 = Image.fromarray(img1)
+        
+        hflip = True if random.random() < 0.5 else False
+        vflip = True if random.random() < 0.5 else False
+        
+        img1 = Image.fromarray(img)
         img1 = transforms.functional.to_tensor(img1)
 
-        # warp 2
-        img2 = self.warp_image(img)
+        # img1, H1 = self.warp_image(img, hflip, vflip) # homography
+        # img1 = Image.fromarray(img1)
+        # img1 = transforms.functional.to_tensor(img1)
+
+        # # warp 2
+        img2, H2 = self.warp_image(img, hflip, vflip)
         img2 = Image.fromarray(img2)
         img2 = transforms.functional.to_tensor(img2)
 
+        # return img, img_warp, idx
         return img1, img2, idx
 
-    def warp_image(self, img):
+
+    def get_sim_mat(self, idxs, device):
+        sim_mat = np.zeros((idxs.shape[0], self.sim_mat.get_shape()[0]))
+        for (i,), idx in np.ndenumerate(idxs):
+            sim_mat[i,:] = self.sim_mat.getrow(idx).todense().squeeze()
+        
+        return torch.FloatTensor(sim_mat).to(device)
+
+    def warp_image(self, img, hflip, vflip):
         perturbed_four_points = []
         for point in four_points:
             perturbed_four_points.append((point[0] + random.randint(-rho,rho), point[1]+random.randint(-rho,rho)))
-        H = cv2.getPerspectiveTransform( np.float32(four_points), np.float32(perturbed_four_points) )
-        H_inverse = np.linalg.inv(H)
-        warped_image = cv2.warpPerspective(img, H_inverse, (224,224))
-        return warped_image
+        if hflip:
+            perturbed_four_points[0], perturbed_four_points[1] = perturbed_four_points[1], perturbed_four_points[0]
+            perturbed_four_points[2], perturbed_four_points[3] = perturbed_four_points[3], perturbed_four_points[2]
+        if vflip:
+            perturbed_four_points[0], perturbed_four_points[3] = perturbed_four_points[3], perturbed_four_points[0]
+            perturbed_four_points[1], perturbed_four_points[2] = perturbed_four_points[2], perturbed_four_points[1]
+
+        H = cv2.getPerspectiveTransform(np.float32(four_points), np.float32(perturbed_four_points))
+        H_inv = np.linalg.inv(H)
+        warped_image = cv2.warpPerspective(img, H_inv, (224,224))
+        return warped_image, H_inv
+        
+
+
+class SAR_TrainDataSet(SAR_DataSet):
+    def __init__(self, img_path, a_mat, patch_size=224):
+        super(SAR_TrainDataSet,self).__init__(img_path, patch_size)
+        self.sim_mat = a_mat
+
+    def __getitem__(self, idx):
+        img = Image.open(os.path.join(self.img_path, "%04d.png"%(idx)))
+        data = pickle.load(open(os.path.join(self.img_path, "%04d.pkl"%(idx)),'rb'))
+
+        hflip = True if random.random() < 0.5 else False
+        vflip = True if random.random() < 0.5 else False
+
+        img = np.array(img)
+
+        kp = data['keypoint']
+        kp_img = np.zeros((self.patch_size, self.patch_size),dtype=np.uint8)
+        nkp = kp.shape[0]
+        for i in range(nkp):
+            kp_img[int(kp[i,1]), int(kp[i,0])] = 255
+        kp_img = Image.fromarray(kp_img, mode='L').resize((224,224))
+
+        # warp
+        img_warp, H1 = self.warp_image(img, hflip, vflip) # homography
+        # img = Image.fromarray(img)
+        img_warp = Image.fromarray(img_warp)
+        # img = transforms.functional.to_tensor(img)
+        img_warp = transforms.functional.to_tensor(img_warp)
+
+        # # warp 2
+        img2, H2 = self.warp_image(img, hflip, vflip)
+        img2 = Image.fromarray(img2)
+        img2 = transforms.functional.to_tensor(img2)
+
+        # return img, img_warp, idx
+        return img_warp, img2, idx
+
+    def warp_image(self, img, hflip, vflip):
+        perturbed_four_points = []
+        for point in four_points:
+            perturbed_four_points.append((point[0] + random.randint(-rho,rho), point[1]+random.randint(-rho,rho)))
+        if hflip:
+            perturbed_four_points[0], perturbed_four_points[1] = perturbed_four_points[1], perturbed_four_points[0]
+            perturbed_four_points[2], perturbed_four_points[3] = perturbed_four_points[3], perturbed_four_points[2]
+        if vflip:
+            perturbed_four_points[0], perturbed_four_points[3] = perturbed_four_points[3], perturbed_four_points[0]
+            perturbed_four_points[1], perturbed_four_points[2] = perturbed_four_points[2], perturbed_four_points[1]
+
+        H = cv2.getPerspectiveTransform(np.float32(four_points), np.float32(perturbed_four_points))
+        H_inv = np.linalg.inv(H)
+        warped_image = cv2.warpPerspective(img, H_inv, (224,224))
+        return warped_image, H_inv
 
     def get_sim_mat(self, idxs, device):
         sim_mat = np.zeros((idxs.shape[0], self.sim_mat.get_shape()[0]))
@@ -123,8 +219,11 @@ class SAR_TrainDataSet(SAR_DataSet):
 def setup_trainloader(data_files, args):
     data_file, img_file = data_files
     data, desc, kp, desc_sift, kp_sift, patch_size, stride = pickle.load(open("%s.pkl"%data_file,'rb'))
-    a_mat = sparse.load_npz("%s.npz"%data_file)
-    trainset = SAR_TrainDataSet(img_file, data, a_mat, desc, kp, desc_sift, kp_sift, patch_size, stride)
+    a_mat = sparse.load_npz("%s_A_mat.npz"%data_file)
+    trainset = SAR_TrainDataSet_POLSAR1(img_file, data, a_mat, desc, kp, desc_sift, kp_sift, patch_size, stride)
+
+    # trainset = SAR_TrainDataSet(img_file, a_mat)
+    
     print('num train data:', len(trainset))
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.bstrain, shuffle=True, num_workers = args.nworkers)
     return trainloader
@@ -133,7 +232,8 @@ def setup_trainloader(data_files, args):
 def setup_testloader(data_files, args):
     data_file, img_file = data_files
     data, desc, kp, desc_sift, kp_sift, patch_size, stride  = pickle.load(open("%s.pkl"%data_file,'rb'))
-    testset = SAR_DataSet(img_file, data, desc, kp, desc_sift, kp_sift, patch_size, stride)
+    testset = SAR_DataSet_POLSAR1(img_file, data, desc, kp, desc_sift, kp_sift, patch_size, stride)
+    # testset = SAR_DataSet(img_file)
     print('num test data:', len(testset))
     testloader = torch.utils.data.DataLoader(testset, batch_size=args.bstest, shuffle=False, num_workers = args.nworkers)
     return testloader
@@ -143,12 +243,13 @@ if __name__ == '__main__':
     from configs import *
     import numpy as np
 
-    traindata = dataconfig['Haywrd']['traindata']
+    traindata = dataconfig['ykdelB']['traindata']
     data_file, img_file = traindata
-    data, desc, kp, desc_sift, kp_sift, patch_size, stride = pickle.load(open("%s.pkl"%data_file,'rb'))
-    a_mat = sparse.load_npz("%s.npz"%data_file)
-    trainset = SAR_TrainDataSet(img_file, data, a_mat, desc, kp, desc_sift, kp_sift, patch_size, stride)
-    img, img2, label = trainset[300]
+    # data, desc, kp, desc_sift, kp_sift, patch_size, stride = pickle.load(open("%s.pkl"%data_file,'rb'))
+    a_mat = sparse.load_npz("%s_A_mat.npz"%data_file)
+    trainset = SAR_TrainDataSet(img_file, a_mat)
+    img, img2, label = trainset[800]
+    img, img2, label = trainset[301]
     # img = img.numpy()*255
     # img = img.astype(np.uint8).transpose(1,2,0)
     # # img = Image.fromarray(img)
