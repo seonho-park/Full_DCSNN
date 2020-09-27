@@ -5,6 +5,7 @@ import shutil
 import json
 import argparse
 import numpy as np
+import random
 from datetime import datetime
 from pprint import pprint
 
@@ -37,8 +38,10 @@ def get_device():
 
 
 def set_seed(seed, device):
+    random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
     if device == 'cuda':
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
