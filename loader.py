@@ -104,9 +104,10 @@ four_points = [top_point, left_point, bottom_point, right_point]
 
 
 class SAR_TrainDataSet_POLSAR1(SAR_DataSet_POLSAR1):
-    def __init__(self, img_path, data, a_mat, desc, kp, desc_sift, kp_sift, patch_size=800, stride=200):
+    def __init__(self, img_path, data, a_mat, desc, kp, desc_sift, kp_sift, patch_size=800, stride=200, homography = True):
         super(SAR_TrainDataSet_POLSAR1,self).__init__(img_path, data, desc, kp, desc_sift, kp_sift, patch_size, stride)
         self.sim_mat = a_mat
+        self.homography = homography
 
     def __getitem__(self, idx):
         img = np.load(os.path.join(self.img_path, "%04d.npy"%(idx)))
@@ -122,12 +123,13 @@ class SAR_TrainDataSet_POLSAR1(SAR_DataSet_POLSAR1):
         # img1 = transforms.functional.to_tensor(img1)
 
         # # warp 2
-        img2, H2 = self.warp_image(img, hflip, vflip)
-        img2 = Image.fromarray(img2)
-        img2 = transforms.functional.to_tensor(img2)
-
-        # return img, img_warp, idx
-        return img1, img2, idx
+        if self.homography:
+            img2, H2 = self.warp_image(img, hflip, vflip)
+            img2 = Image.fromarray(img2)
+            img2 = transforms.functional.to_tensor(img2)
+            return img2, img1, idx
+        else:
+            return img1, img1, idx
 
 
     def get_sim_mat(self, idxs, device):

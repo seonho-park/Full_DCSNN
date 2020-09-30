@@ -345,7 +345,7 @@ class MoCo(nn.Module):
     """
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, encoder_q, encoder_k, dim=128, K=65536, m=0.999, T=0.07, no_moco=False):
+    def __init__(self, encoder_q, encoder_k, ntrain, dim=128, K=65536, m=0.999, T=0.07, no_moco=False):
         super(MoCo, self).__init__()
         self.encoder_q = encoder_q
         
@@ -353,18 +353,38 @@ class MoCo(nn.Module):
         self.K = K
         self.m = m
         self.T = T
+        self.ntrain = ntrain
         self.activate = not no_moco
 
         if self.activate:
+            print("MoCo activated")
             self.encoder_k = encoder_k
             for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
                 param_k.data.copy_(param_q.data)  # initialize
                 param_k.requires_grad = False  # not update by gradient
         
         # # create the queue
-        # self.register_buffer("queue", torch.randn(dim, K))
-        # self.queue = nn.functional.normalize(self.queue, dim=0)
-        # self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+        self.register_buffer("queue", torch.randn(dim, K)) # global features
+        self.register_buffer("queue_idx", torch.randint(low=0, high=ntrain, size=(1, K))) # ground truth for global feature
+        self.queue = nn.functional.normalize(self.queue, dim=0)
+        self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+
+    @torch.no_grad()
+    def dequeue_and_enqueue(self, keys, idxs):
+        # gather keys before updating queue
+        # keys = concat_all_gather(keys)
+
+        batch_size = keys.shape[0]
+
+        ptr = int(self.queue_ptr)
+        assert self.K % batch_size == 0  # for simplicity
+
+        # replace the keys at ptr (dequeue and enqueue)
+        self.queue[:, ptr:ptr + batch_size] = keys.T
+        self.queue_idx[:, ptr:ptr + batch_size] = idxs
+        ptr = (ptr + batch_size) % self.K  # move pointer
+
+        self.queue_ptr[0] = ptr
 
     @torch.no_grad()
     def _momentum_update_key_encoder(self):
@@ -382,8 +402,9 @@ class MoCo(nn.Module):
         if self.activate:
             with torch.no_grad():  # no gradient to keys
                 self._momentum_update_key_encoder()  # update the key encoder
-                k = self.encoder_k(im_k)
-
-            return q, k 
+                k = self.encoder_k(im_k).detach()
+             
         else: # not moco
-            return q, q
+            k = self.encoder_q(im_k).detach()
+
+        return q, k

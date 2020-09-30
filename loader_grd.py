@@ -57,8 +57,6 @@ class SAR_TrainDataSet(SAR_DataSet):
     def __getitem__(self, idx):
         img = Image.open(os.path.join(self.img_path, "%04d.png"%(idx)))
         img = np.array(img)
-        img_tensor = Image.fromarray(img)
-        img_tensor = transforms.functional.to_tensor(img_tensor)
 
         data = pickle.load(open(os.path.join(self.img_path, "%04d.pkl"%(idx)),'rb'))
         kp = data['keypoint']
@@ -69,15 +67,24 @@ class SAR_TrainDataSet(SAR_DataSet):
         kp_img = Image.fromarray(kp_img, mode='L').resize((224,224))
 
         if self.homography:
-            # warp
+            # warp 1
             hflip = True if random.random() < 0.5 else False
             vflip = True if random.random() < 0.5 else False
-            img_warp, H1 = self.warp_image(img, hflip, vflip) # homography
-            img_warp = Image.fromarray(img_warp)
-            img_warp = transforms.functional.to_tensor(img_warp)
-            return img_warp, img_tensor, idx
+            img_warp1, H1 = self.warp_image(img, hflip, vflip) # homography
+            img_warp1 = Image.fromarray(img_warp1)
+            img_warp1 = transforms.functional.to_tensor(img_warp1)
+
+            # warp 2
+            hflip = True if random.random() < 0.5 else False
+            vflip = True if random.random() < 0.5 else False
+            img_warp2, H1 = self.warp_image(img, hflip, vflip) # homography
+            img_warp2 = Image.fromarray(img_warp2)
+            img_warp2 = transforms.functional.to_tensor(img_warp2)
+            return img_warp1, img_warp2, idx
         else:
-            return img_tensor, img_tensor, idx
+            img = Image.fromarray(img)
+            img = transforms.functional.to_tensor(img)
+            return img, img, idx
 
 
     def warp_image(self, img, hflip, vflip):
@@ -106,20 +113,39 @@ class SAR_TrainDataSet(SAR_DataSet):
 
 
 def setup_trainloader(data_files, args):
-    A_mat_file, img_file = data_files
-    a_mat = sparse.load_npz("%s_A_mat.npz"%A_mat_file)
-    trainset = SAR_TrainDataSet(img_file, a_mat, homography = not args.no_homography)
+    data_file, img_file = data_files
+    if args.sartype.lower() in ['grd']:
+        a_mat = sparse.load_npz("%s_A_mat.npz"%data_file)
+        trainset = SAR_TrainDataSet(img_file, a_mat, homography = not args.no_homography)
+    elif args.sartype.lower() in ['mlc']:
+        data, desc, kp, desc_sift, kp_sift, patch_size, stride = pickle.load(open("%s.pkl"%data_file,'rb'))
+        a_mat = sparse.load_npz("%s_A_mat.npz"%data_file)
+        import loader
+        trainset = loader.SAR_TrainDataSet_POLSAR1(img_file, data, a_mat, desc, kp, desc_sift, kp_sift, patch_size, stride, homography = not args.no_homography)
+
     print('num train data:', len(trainset))
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.bstrain, shuffle=True, num_workers = args.nworkers)
     return trainloader
 
 
 def setup_testloader(data_files, args):
-    _, img_file = data_files
-    testset = SAR_DataSet(img_file)
+    data_file, img_file = data_files
+    if args.sartype.lower() in ['grd']:
+        testset = SAR_DataSet(img_file)
+    elif args.sartype.lower() in ['mlc']:
+        import loader
+        data, desc, kp, desc_sift, kp_sift, patch_size, stride  = pickle.load(open("%s.pkl"%data_file,'rb'))
+        testset = loader.SAR_DataSet_POLSAR1(img_file, data, desc, kp, desc_sift, kp_sift, patch_size, stride)
     print('num test data:', len(testset))
     testloader = torch.utils.data.DataLoader(testset, batch_size=args.bstest, shuffle=False, num_workers = args.nworkers)
     return testloader
+
+
+def load_gtmat(sartype, gtmat_fn):
+    if sartype.lower() in ['grd']:
+        return sparse.load_npz(gtmat_fn) # load groundtruth matrix
+    elif sartype.lower() in ['mlc']:
+        return np.load(gtmat_fn) 
 
 
 if __name__ == '__main__':

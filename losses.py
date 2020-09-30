@@ -38,6 +38,7 @@ class Loss_DCSNN2(nn.Module):
         return loss, global_loss, local_loss, recon_loss, reg_global, reg_local
 
 
+
 class Loss_DCSNN(nn.Module):
     def __init__(self, device, lam_reg = 0.1, temp = 1., self_learning=True):
         super().__init__()
@@ -46,26 +47,26 @@ class Loss_DCSNN(nn.Module):
         self.T = temp
         self.self_learning = self_learning
 
-    def forward(self, global_feature_q, global_feature_k, D_global, S):
+    def forward(self, global_feature_q, global_feature_k, key_queue, S):
         # regularization
         norm = global_feature_q.norm(dim=1)
         reg_global = (norm - torch.ones_like(norm).cuda()).pow(2).mean()
         
         # global loss
-        omega_x = global_feature_q.mm(Variable(D_global,requires_grad=False).t())/self.T # logit values
+        omega_x = global_feature_q.mm(Variable(key_queue,requires_grad=False))/self.T # logit values
         global_loss = F.binary_cross_entropy_with_logits(omega_x, S)
         
         # self learning
         if self.self_learning:
             norm_k = global_feature_k.norm(dim=1)
             reg_global_self = (norm_k - torch.ones_like(norm_k).cuda()).pow(2).mean()
+            reg_global += reg_global_self
 
             self_omega_x = (global_feature_q*Variable(global_feature_k,requires_grad=False)).sum(dim=1)/self.T
             label = torch.ones_like(self_omega_x) # self label
             global_loss_self = F.binary_cross_entropy_with_logits(self_omega_x, label)
             global_loss += global_loss_self
-            reg_global += reg_global_self
-
+            
         # total loss
         loss =  global_loss + self.lam_reg * reg_global
 

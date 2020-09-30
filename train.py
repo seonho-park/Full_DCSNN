@@ -16,7 +16,7 @@ import model
 import loader_grd
 import losses
 import utils
-from configs import *
+import configs
 import pqcode
 
 
@@ -84,7 +84,7 @@ def compute_mAP(Xtrain, gtmat, testloader_real, device, net, verbose=False):
     return mAP, mAP_l2norm, mAP_cs
 
 
-def train(epoch, net, trainloader, criterion, optimizer, device, D_global, logger, bsanchor):
+def train(epoch, net, trainloader, criterion, optimizer, device, logger):
     train_loss = 0.
     global_loss_total = 0.
     reg_global_total = 0.
@@ -95,6 +95,8 @@ def train(epoch, net, trainloader, criterion, optimizer, device, D_global, logge
     ntrain = len(dataset)
 
     for batch_idx, (img_warp, img, idxs) in enumerate(trainloader):
+        if idxs.size(0) != args.bstrain:
+            continue
         t0 = time.time()
         img_warp, img = img_warp.to(device), img.to(device)
         optimizer.zero_grad()
@@ -103,25 +105,28 @@ def train(epoch, net, trainloader, criterion, optimizer, device, D_global, logge
         # feature_q, feature_k = feature_out
         feature_q, feature_k = net(img_warp, img)
         mem2 = torch.cuda.memory_allocated()
-        feature_k_ = feature_k.clone().detach().cpu()
+        # feature_k_ = feature_k.cpu()
         
         # update Ds
-        for i, idx in enumerate(idxs):
-            D_global[idx,:] = feature_k_[i,:]
-        A = dataset.get_sim_mat(idxs,'cpu') # adjacency matrix
-
+        # for i, idx in enumerate(idxs):
+        #     D_global[idx,:] = feature_k_[i,:]
+        
         # get stochastic U and S
-        anchor_idxs = np.random.permutation(ntrain)[:bsanchor]
-        D_global_ = D_global[anchor_idxs,:].to(device)
-        A_ = A[:,anchor_idxs].to(device)
-
-        loss, global_loss, reg_global = criterion(feature_q, feature_k, D_global_, A_)
+        # anchor_idxs = np.random.permutation(ntrain)[:bsanchor]
+        # D_global_ = D_global[anchor_idxs,:].to(device)
+        # A_ = A[:,anchor_idxs].to(device)
+        A = dataset.get_sim_mat(idxs,'cpu') # adjacency matrix
+        A_ = A[:,net.queue_idx.squeeze()].to(device)
+        
+        loss, global_loss, reg_global = criterion(feature_q, feature_k, net.queue, A_)
         loss.backward()
         train_loss += loss.item()
         global_loss_total += global_loss.item()
         reg_global_total += reg_global.item()
         
         optimizer.step()
+
+        net.dequeue_and_enqueue(feature_k, idxs)
         mem3 = torch.cuda.memory_allocated()
         
 
@@ -178,8 +183,20 @@ def main():
     chpt_name = '%s_%s_%d'%(args.dataname, args.method, args.nglobal)
     print('Checkpoint name:', chpt_name)
 
+
+    # load data
+    assert args.dataname in ['Haywrd','ykdelB']
+    dataconfig = configs.dataconfig[args.sartype.lower()]
+    traindata = dataconfig[args.dataname]['traindata']
+    testdata = dataconfig[args.dataname]['testdata']
+    
+    trainloader = loader_grd.setup_trainloader(traindata, args)
+    testloader = loader_grd.setup_testloader(traindata, args)
+    testloader_real = loader_grd.setup_testloader(testdata, args)
+    gtmat = loader_grd.load_gtmat(args.sartype, dataconfig[args.dataname]['gtmat'])
+    
     # setup architecture
-    net = model.dcsnn_full(args.nglobal, pretrained=True, K=args.bstrain*100, m=args.moco_m, T = args.temp, no_moco=args.no_moco).to(device)
+    net = model.dcsnn_full(args.nglobal, pretrained=True, K=args.moco_k, m=args.moco_m, T = args.temp, no_moco=args.no_moco, ntrain=len(traindata)).to(device)
 
     # setup criterion and optimizer
     criterion = losses.setup_loss(args.method, device, lam_reg = args.lamreg, temp = args.temp, self_learning = not args.no_selflearning)
@@ -187,36 +204,25 @@ def main():
     # optimizer = optim.Adam(net.parameters(), lr = args.lr, weight_decay=1e-4) # TODO: need experiments
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100,150], gamma=0.1)   
     
-    # load data
-    assert args.dataname in ['Haywrd','ykdelB']
-    traindata = dataconfig[args.dataname]['traindata']
-    testdata = dataconfig[args.dataname]['testdata']
-    # gtmat = np.load(dataconfig[args.dataname]['gtmat']) 
-    gtmat = sparse.load_npz(dataconfig[args.dataname]['gtmat']) # load groundtruth matrix
-    trainloader = loader_grd.setup_trainloader(traindata, args)
-    testloader = loader_grd.setup_testloader(traindata, args)
-    testloader_real = loader_grd.setup_testloader(testdata, args)
-    
     # initialize the anchor matrix U
-    D_global = torch.zeros((len(trainloader.dataset), args.nglobal), device = "cpu") 
-    net.eval()
-    with torch.no_grad():
-        for img, idxs in testloader:
-            img = img.to(device)
-            # feature = net.moco(img).detach().cpu()
-            feature = net(img).detach().cpu()
+    # D_global = torch.zeros((len(trainloader.dataset), args.nglobal), device = "cpu")
+    # net.eval()
+    # with torch.no_grad():
+    #     for img, idxs in testloader:
+    #         img = img.to(device)
+    #         # feature = net.moco(img).detach().cpu()
+    #         feature = net(img).detach().cpu()
             
-            for i, idx in enumerate(idxs):
-                D_global[idx,:] = feature[i,:]
-        del feature
-    print(torch.cuda.memory_allocated())
+    #         for i, idx in enumerate(idxs):
+    #             D_global[idx,:] = feature[i,:]
+    #     del feature
+    # print(torch.cuda.memory_allocated())
     print('==> Start training ..')   
     start = time.time()
     best_mAP = -1
 
-    
     for epoch in range(args.maxepoch):
-        train(epoch, net, trainloader, criterion, optimizer, device, D_global, logger, args.bsanchor)
+        train(epoch, net, trainloader, criterion, optimizer, device, logger)
         scheduler.step() # update optimizer lr
         if epoch%10==0:
             mAP, mAP_l2, mAP_cs = test(net, gtmat, testloader, testloader_real, device, logger)
@@ -225,13 +231,15 @@ def main():
                 best_mAP = mAP
                 best_epoch = epoch
                 state = {'method': args.method, 'net': net.state_dict(), 'mAP': mAP, 'args': vars(args)}
-                torch.save(state, './%s/%s.pth'%(result_dir, chpt_name))
+                if result_dir is not None:
+                    torch.save(state, './%s/%s.pth'%(result_dir, chpt_name))
+
+    logger.write("Best mAP: %.6f (Epoch: %d)"%(best_mAP, best_epoch))
 
     if args.batchout:
         with open('temp_result.txt', 'w') as f:
             f.write("%10.8f\n"%(best_mAP))
             f.write("%d"%(best_epoch))
-
 
     end = time.time()
     hours, rem = divmod(end-start, 3600)
@@ -242,10 +250,11 @@ def main():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=1, help='random seed')
+    parser.add_argument('--sartype', type=str, default='grd', help='SAR image type mlc (previous)|grd (current)')
     parser.add_argument('--dataname', type=str, default='Haywrd', help='data name Haywrd|ykdelB')
     parser.add_argument('--method', type=str, default='dcsnn2', help='learning method dpsh|dhn|dhnnl2|dcsnn')
     parser.add_argument('--bstrain', type=int, default=32, help='batch size for training')
-    parser.add_argument('--bsanchor', type=int, default=1024, help='batch size for anchor matrix')
+    # parser.add_argument('--bsanchor', type=int, default=1024, help='batch size for anchor matrix')
     parser.add_argument('--bstest', type=int, default=64, help='batch size for testing')
     parser.add_argument('--nworkers', type=int, default=2, help='the number of workers used in DataLoader')
     parser.add_argument('--maxepoch', type=int, default=200, help='the number of epoches')
@@ -254,7 +263,8 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
     parser.add_argument('--lamreg', type=float, default=0.1, help='coefficient for regularization')
     parser.add_argument('--temp', type=float, default=0.5, help='logit temperature')
-    parser.add_argument('--moco-m', type=float, default=0.999, help='moco momentum of updating key encoder (default: 0.999)')
+    parser.add_argument('--moco-m', type=float, default=0.9999, help='moco momentum of updating key encoder (default: 0.999)')
+    parser.add_argument('--moco-k', type=int, default=1024, help='queue size; number of negative keys (default: 1024)')
 
     parser.add_argument('--suffix', type=str, default='test', help='suffix of result directory')
     parser.add_argument('--batchout', action='store_true', help='batch out')
@@ -263,5 +273,10 @@ if __name__ == '__main__':
     parser.add_argument('--no-homography', action='store_true', help='turn off homography')
     parser.add_argument('--no-selflearning', action='store_true', help='turn off self learning')
     args = parser.parse_args()
+    # args.no_moco= False
+    # args.no_homography = False
+    # args.no_selflearning = True
+
+    assert args.sartype.lower() in ['grd','mlc']
     main()    
  

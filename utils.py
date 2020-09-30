@@ -12,9 +12,10 @@ from pprint import pprint
 class Logger():
     def __init__(self, result_dir, filename, args):
         self.result_dir = result_dir
-        self.logger_fn = result_dir+'/log.txt'
-        self.logger = open(self.logger_fn,'w')
-        self.initial_write(filename, args)
+        if result_dir is not None:
+            self.logger_fn = result_dir+'/log.txt'
+            self.logger = open(self.logger_fn,'w')
+            self.initial_write(filename, args)
 
     def initial_write(self, filename, args):
         self.logger.write("%s \n"%(filename))
@@ -25,10 +26,12 @@ class Logger():
 
     def write(self, string, end='\n'):
         print(string, end=end)
-        self.logger.write("%s\n"%(string))
+        if self.result_dir is not None:
+            self.logger.write("%s\n"%(string))
     
     def write_only(self, string):
-        self.logger.write("%s\n"%(string))
+        if self.result_dir is not None:
+            self.logger.write("%s\n"%(string))
         
 
 def get_device():
@@ -57,21 +60,20 @@ def config_backup_get_log(args, filename):
     # set result dir
     current_time = str(datetime.now())
     dir_name = '%s_%s'%(current_time, args.suffix)
-    result_dir = 'results/%s'%dir_name
+    result_dir = 'results/%s'%dir_name if not args.suffix in ['test'] else None
+    if result_dir is not None:
+        if not os.path.isdir(result_dir):
+            os.mkdir(result_dir)
+            os.mkdir(result_dir+'/codes')
 
-    if not os.path.isdir(result_dir):
-        os.mkdir(result_dir)
-        os.mkdir(result_dir+'/codes')
+        # deploy codes
+        files = glob.iglob('*.py')
+        model_files = glob.iglob('./model/*.py')
 
-    # deploy codes
-    files = glob.iglob('*.py')
-    model_files = glob.iglob('./model/*.py')
-
-    for file in files:
-        shutil.copy2(file, result_dir+'/codes')
-    for model_file in model_files:
-        shutil.copy2(model_file, result_dir+'/codes/model')
-
+        for file in files:
+            shutil.copy2(file, result_dir+'/codes')
+        for model_file in model_files:
+            shutil.copy2(model_file, result_dir+'/codes/model')
 
     # printout information
     print("Export directory:", result_dir)
