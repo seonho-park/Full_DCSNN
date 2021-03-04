@@ -15,9 +15,10 @@ import loader_grd
 import configs
 
 def main():
+    dataconfig_ = configs.dataconfig['grd']
     assert args.dataname in ['Haywrd','ykdelB']
-    traindata = configs.dataconfig[args.dataname]['traindata']
-    testdata = configs.dataconfig[args.dataname]['testdata']
+    traindata = dataconfig_[args.dataname]['traindata']
+    testdata = dataconfig_[args.dataname]['testdata']
 
     trainloader = loader_grd.setup_testloader(traindata, args)
     testloader = loader_grd.setup_testloader(testdata, args)
@@ -60,4 +61,5 @@ if __name__ == '__main__':
     parser.add_argument('--bstest', type=int, default=128, help='batch size for testing')
     parser.add_argument('--nworkers', type=int, default=16, help='the number of workers used in DataLoader')
     args = parser.parse_args()
+    args.sartype = 'grd'
     main()

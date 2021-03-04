@@ -6,14 +6,16 @@ import json
 import argparse
 import numpy as np
 import random
+from pathlib import Path
 from datetime import datetime
 from pprint import pprint
 
 class Logger():
     def __init__(self, result_dir, filename, args):
-        self.result_dir = result_dir
+        self.result_dir = None
         if result_dir is not None:
-            self.logger_fn = result_dir+'/log.txt'
+            self.result_dir = result_dir._str
+            self.logger_fn = self.result_dir+'/log.txt'
             self.logger = open(self.logger_fn,'w')
             self.initial_write(filename, args)
 
@@ -51,29 +53,30 @@ def set_seed(seed, device):
         torch.backends.cudnn.benchmark = True
 
 
-def config_backup_get_log(args, filename):
-    if not os.path.isdir('./results'):
-        os.mkdir('./results')
-    if not os.path.isdir('./chpt'):
-        os.mkdir('./chpt')
+def config_backup_get_log(args, sub_dir, filename):
+    result_dir = Path("./results")
+    result_dir.mkdir(exist_ok=True)
 
     # set result dir
     current_time = str(datetime.now())
-    dir_name = '%s_%s'%(current_time, args.suffix)
-    result_dir = 'results/%s'%dir_name if not args.suffix in ['test'] else None
+    dir_name = '%s/%s_%s'%(sub_dir, current_time, args.suffix)
+    result_dir = Path(os.path.join("./results", dir_name)) if not args.suffix in ['test'] else None
+    
+    # if result_dir is not None:
+    #     if not os.path.isdir(result_dir):
+    #         os.mkdir(result_dir)
+    #         os.mkdir(result_dir+'/codes')
     if result_dir is not None:
-        if not os.path.isdir(result_dir):
-            os.mkdir(result_dir)
-            os.mkdir(result_dir+'/codes')
+        result_dir.mkdir(exist_ok=True, parents=True)
+        Path(os.path.join(result_dir, "codes")).mkdir()
 
         # deploy codes
         files = glob.iglob('*.py')
-        model_files = glob.iglob('./model/*.py')
-
         for file in files:
-            shutil.copy2(file, result_dir+'/codes')
-        for model_file in model_files:
-            shutil.copy2(model_file, result_dir+'/codes/model')
+            shutil.copy2(file, os.path.join(result_dir,"codes"))
+        # model_files = glob.iglob('./model/*.py')
+        # for model_file in model_files:
+        #     shutil.copy2(model_file, result_dir+'/codes/model')
 
     # printout information
     print("Export directory:", result_dir)
